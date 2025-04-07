@@ -3,7 +3,6 @@ import path from 'path';
 import fs from 'fs';
 import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
-import ytdl from 'ytdl-core';
 import { v4 as uuidv4 } from 'uuid';
 import { Server } from 'socket.io';
 import config from './config';
@@ -84,7 +83,8 @@ export class Transcriber {
       throw new Error('FFmpeg path not found');
     }
     
-    if (!ytdl.validateURL(videoUrl)) {
+    // Validação básica de URL do YouTube
+    if (!videoUrl.match(/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/)) {
       throw new Error('Invalid YouTube URL');
     }
     
@@ -124,17 +124,18 @@ export class Transcriber {
     try {
       if (config.verbose) console.log(`[Job ${jobId}] Starting video processing for URL: ${videoUrl}`);
       
-      // Get video info
-      if (config.verbose) console.log(`[Job ${jobId}] Fetching video info...`);
-      const videoInfo = await ytdl.getInfo(videoUrl);
-      const videoTitle = videoInfo.videoDetails.title.replace(/[^a-zA-Z0-9\s-_]/g, '');
+      // Extrair ID do vídeo para usar como nome do arquivo
+      const videoId = this.extractVideoId(videoUrl);
+      if (!videoId) {
+        throw new Error(`Could not extract video ID from URL: ${videoUrl}`);
+      }
+      
+      // Obter timestamp para garantir nomes únicos
+      const timestamp = new Date().getTime();
+      const videoTitle = `video_${videoId}_${timestamp}`;
       
       if (config.verbose) {
-        console.log(`[Job ${jobId}] Video info retrieved:`, {
-          title: videoTitle,
-          duration: videoInfo.videoDetails.lengthSeconds + 's',
-          author: videoInfo.videoDetails.author.name
-        });
+        console.log(`[Job ${jobId}] Using video ID: ${videoId}`);
       }
       
       // Set file paths
@@ -199,6 +200,13 @@ export class Transcriber {
       this.updateJobStatus(jobId, 'error', error.message);
     }
   }
+  
+  // Método auxiliar para extrair o ID do vídeo do YouTube
+  private extractVideoId(url: string): string | null {
+    const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[7].length === 11) ? match[7] : null;
+  }
 
   private async downloadVideo(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -206,65 +214,97 @@ export class Transcriber {
       this.updateJobStatus(jobId, 'downloading');
       
       try {
-        if (config.verbose) console.log(`[Job ${jobId}] Creating ytdl stream with quality: highestaudio`);
-        const video = ytdl(videoUrl, { quality: 'highestaudio' });
-        let totalBytes = 0;
-        let downloadedBytes = 0;
+        // Usar yt-dlp em vez de ytdl-core
+        if (config.verbose) console.log(`[Job ${jobId}] Starting yt-dlp download process`);
+        
+        // Definir o diretório de saída e nome do arquivo temporário
+        const audioDir = path.dirname(outputPath);
+        const tempFileName = path.basename(outputPath);
+        
+        // Garantir que o diretório existe
+        if (!fs.existsSync(audioDir)) {
+          fs.mkdirSync(audioDir, { recursive: true });
+        }
+        
+        // Comando yt-dlp para baixar apenas o áudio em formato mp3
+        const ytDlpProcess = spawn('yt-dlp', [
+          '-f', 'bestaudio',
+          '-o', outputPath,
+          '--extract-audio',
+          '--audio-format', 'mp3',
+          '--audio-quality', '0',
+          '--newline', // Para obter saída linha por linha
+          '--progress',
+          videoUrl
+        ]);
+        
         let lastLogTime = Date.now();
+        let progressRegex = /\[download\]\s+(\d+\.?\d*)%/;
         
-        video.on('info', (info, format) => {
-          totalBytes = parseInt(format.contentLength, 10);
+        ytDlpProcess.stdout.on('data', (data) => {
+          const output = data.toString();
           if (config.verbose) {
-            console.log(`[Job ${jobId}] Video info received:`, {
-              contentLength: totalBytes ? (totalBytes / (1024 * 1024)).toFixed(2) + ' MB' : 'Unknown',
-              format: format.qualityLabel || format.quality,
-              container: format.container,
-              audioCodec: format.audioCodec
-            });
+            console.log(`[Job ${jobId}] yt-dlp output: ${output.trim()}`);
           }
-        });
-        
-        video.on('progress', (_, downloaded, total) => {
-          if (total) {
-            downloadedBytes = downloaded;
-            const percent = Math.floor((downloaded / total) * 100);
+          
+          // Extrair informações de progresso
+          const match = output.match(progressRegex);
+          if (match && match[1]) {
+            const percent = parseFloat(match[1]);
+            
+            // Atualizar progresso
             this.updateJobProgress(jobId, 'download', percent);
             
             // Log progress every 5 seconds if verbose
             const now = Date.now();
             if (config.verbose && (now - lastLogTime > 5000)) {
               lastLogTime = now;
-              console.log(`[Job ${jobId}] Download progress: ${percent}% (${(downloaded / (1024 * 1024)).toFixed(2)}/${(total / (1024 * 1024)).toFixed(2)} MB)`);
+              console.log(`[Job ${jobId}] Download progress: ${percent.toFixed(1)}%`);
             }
           }
         });
         
-        video.on('error', (err) => {
-          console.error(`[Job ${jobId}] Error in ytdl stream:`, err);
-          reject(new Error(`YouTube download error: ${err.message}`));
+        ytDlpProcess.stderr.on('data', (data) => {
+          const output = data.toString();
+          if (config.verbose) {
+            console.log(`[Job ${jobId}] yt-dlp stderr: ${output.trim()}`);
+          }
         });
         
-        if (config.verbose) console.log(`[Job ${jobId}] Setting up FFmpeg process with bitrate: 192k`);
-        const ffmpegProcess = ffmpeg(video)
-          .audioBitrate(192)
-          .save(outputPath)
-          .on('start', (command) => {
-            if (config.verbose) console.log(`[Job ${jobId}] FFmpeg process started with command: ${command}`);
-          })
-          .on('progress', (progress) => {
-            if (config.verbose && config.debug) {
-              console.log(`[Job ${jobId}] FFmpeg progress:`, progress);
+        ytDlpProcess.on('close', (code) => {
+          if (code === 0) {
+            if (config.verbose) console.log(`[Job ${jobId}] yt-dlp process completed successfully`);
+            
+            // Verificar se o arquivo foi criado
+            if (fs.existsSync(outputPath)) {
+              const stats = fs.statSync(outputPath);
+              if (config.verbose) {
+                console.log(`[Job ${jobId}] Audio file downloaded:`, {
+                  path: outputPath,
+                  size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
+                  created: stats.birthtime
+                });
+              }
+              
+              this.updateJobProgress(jobId, 'download', 100);
+              resolve();
+            } else {
+              const error = new Error(`Audio file not created: ${outputPath}`);
+              console.error(`[Job ${jobId}] ${error.message}`);
+              reject(error);
             }
-          })
-          .on('end', () => {
-            if (config.verbose) console.log(`[Job ${jobId}] FFmpeg process completed successfully`);
-            this.updateJobProgress(jobId, 'download', 100);
-            resolve();
-          })
-          .on('error', (err) => {
-            console.error(`[Job ${jobId}] FFmpeg error:`, err);
-            reject(new Error(`FFmpeg error: ${err.message}`));
-          });
+          } else {
+            const error = new Error(`yt-dlp process exited with code ${code}`);
+            console.error(`[Job ${jobId}] ${error.message}`);
+            reject(error);
+          }
+        });
+        
+        ytDlpProcess.on('error', (err) => {
+          console.error(`[Job ${jobId}] Error in yt-dlp process:`, err);
+          reject(new Error(`yt-dlp error: ${err.message}`));
+        });
+        
       } catch (error) {
         console.error(`[Job ${jobId}] Unexpected error in downloadVideo:`, error);
         reject(error);

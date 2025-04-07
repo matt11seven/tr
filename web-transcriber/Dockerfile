@@ -9,8 +9,9 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Install ffmpeg
-RUN apk add --no-cache ffmpeg
+# Install ffmpeg, python and yt-dlp
+RUN apk add --no-cache ffmpeg python3 py3-pip
+RUN pip3 install yt-dlp
 
 # Build the application
 RUN npm run build
@@ -20,8 +21,9 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Install ffmpeg in production image
-RUN apk add --no-cache ffmpeg
+# Install ffmpeg, python and yt-dlp in production image
+RUN apk add --no-cache ffmpeg python3 py3-pip
+RUN pip3 install yt-dlp
 
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
