@@ -35,8 +35,8 @@ web-transcriber/
 
 1. Clone o repositório:
    ```
-   git clone https://github.com/seu-usuario/youtube-transcriber.git
-   cd youtube-transcriber
+   git clone https://github.com/matt11seven/tr.git
+   cd tr/web-transcriber
    ```
 
 2. Instale as dependências:
