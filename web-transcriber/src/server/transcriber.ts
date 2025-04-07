@@ -221,7 +221,7 @@ export class Transcriber {
     if (config.verbose) console.log(`[Job ${jobId}] Chamando script Python para download...`);
     
     // Usar o script Python existente que está funcionando corretamente
-    return new Promise((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       try {
         // Verificar se o diretório de áudio existe
         const audioDir = path.dirname(outputPath);
@@ -325,7 +325,7 @@ export class Transcriber {
 
 
   private async downloadWithYtDlp(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       if (config.verbose) console.log(`[Job ${jobId}] Starting download process for: ${videoUrl}`);
       this.updateJobStatus(jobId, 'downloading');
       
@@ -468,7 +468,7 @@ export class Transcriber {
   }
 
   private async downloadWithYtDlpAlternative(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       if (config.verbose) console.log(`[Job ${jobId}] Tentando download alternativo para: ${videoUrl}`);
       this.updateJobStatus(jobId, 'downloading');
       
@@ -581,7 +581,7 @@ export class Transcriber {
   }
 
   private async downloadWithYtdlCore(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       if (config.verbose) console.log(`[Job ${jobId}] Tentando download com ytdl-core para: ${videoUrl}`);
       this.updateJobStatus(jobId, 'downloading');
       
@@ -723,66 +723,56 @@ export class Transcriber {
   private async uploadAudio(audioPath: string): Promise<string> {
     if (config.verbose) console.log(`Uploading audio file: ${audioPath}`);
     
-    try {
-      // Check if file exists and get size
-      if (!fs.existsSync(audioPath)) {
-        throw new Error(`Audio file not found: ${audioPath}`);
-      }
-      
-      const stats = fs.statSync(audioPath);
-      if (config.verbose) {
-        console.log(`Audio file details:`, {
-          size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
-          created: stats.birthtime,
-          path: audioPath
-        });
-      }
-      
-      const audioFile = fs.readFileSync(audioPath);
-      if (config.verbose) console.log(`Read ${audioFile.length} bytes from audio file, sending to AssemblyAI...`);
-      
-      const startTime = Date.now();
-      const response = await axios.post('https://api.assemblyai.com/v2/upload', audioFile, {
-        headers: {
-          'authorization': this.apiKey,
-          'content-type': 'application/octet-stream'
-        }
-      });
-      
-      const uploadTime = ((Date.now() - startTime) / 1000).toFixed(2);
-      if (config.verbose) console.log(`Audio upload completed in ${uploadTime}s. Upload URL: ${response.data.upload_url}`);
-      
-      return response.data.upload_url;
-    } catch (error: any) {
-      console.error(`Error uploading audio:`, error);
-      throw new Error(`Failed to upload audio: ${error.message}`);
+    // Check if file exists and get size
+    if (!fs.existsSync(audioPath)) {
+      throw new Error(`Audio file not found: ${audioPath}`);
     }
+    
+    const stats = fs.statSync(audioPath);
+    if (config.verbose) {
+      console.log(`Audio file details:`, {
+        size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
+        created: stats.birthtime,
+        path: audioPath
+      });
+    }
+    
+    const audioFile = fs.readFileSync(audioPath);
+    if (config.verbose) console.log(`Read ${audioFile.length} bytes from audio file, sending to AssemblyAI...`);
+    
+    const startTime = Date.now();
+    const response = await axios.post('https://api.assemblyai.com/v2/upload', audioFile, {
+      headers: {
+        'authorization': this.apiKey,
+        'content-type': 'application/octet-stream'
+      }
+    });
+  
+    const uploadTime = ((Date.now() - startTime) / 1000).toFixed(2);
+    if (config.verbose) console.log(`Audio upload completed in ${uploadTime}s. Upload URL: ${response.data.upload_url}`);
+    
+    return response.data.upload_url;
   }
 
   private async startTranscriptionJob(audioUrl: string): Promise<string> {
     if (config.verbose) console.log(`Starting transcription job for audio: ${audioUrl}`);
     
-    try {
-      const startTime = Date.now();
-      const response = await axios.post('https://api.assemblyai.com/v2/transcript', {
-        audio_url: audioUrl,
-        speaker_labels: true,
-        language_code: 'pt'
-      }, {
-        headers: {
-          'authorization': this.apiKey,
-          'content-type': 'application/json'
-        }
-      });
-      
-      const requestTime = ((Date.now() - startTime) / 1000).toFixed(2);
-      if (config.verbose) console.log(`Transcription job created in ${requestTime}s. Transcript ID: ${response.data.id}`);
-      
-      return response.data.id;
-    } catch (error: any) {
-      console.error(`Error starting transcription job:`, error);
-      throw new Error(`Failed to start transcription: ${error.message}`);
-    }
+    const startTime = Date.now();
+    const response = await axios.post('https://api.assemblyai.com/v2/transcript', {
+      audio_url: audioUrl,
+      speaker_labels: true,
+      language_code: 'pt'
+    }, {
+      headers: {
+        'authorization': this.apiKey,
+        'content-type': 'application/json'
+      }
+    });
+    
+    const requestTime = ((Date.now() - startTime) / 1000).toFixed(2);
+    if (config.verbose) console.log(`Transcription job created in ${requestTime}s. Transcript ID: ${response.data.id}`);
+    
+    return response.data.id;
   }
 
   private async waitForTranscriptionCompletion(jobId: string, transcriptId: string): Promise<any> {
