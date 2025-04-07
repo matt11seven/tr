@@ -48,5 +48,9 @@ ENV PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 # Expose the port
 EXPOSE 3000
 
-# Start the server
-CMD ["node", "dist/server/index.js"]
+# Copiar script de inicialização
+COPY start.sh ./
+RUN chmod +x start.sh
+
+# Start the server using the initialization script
+CMD ["/bin/sh", "./start.sh"]

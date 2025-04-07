@@ -44,9 +44,14 @@ ENV PORT=3000
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 ENV VERBOSE=true
 ENV DEBUG=true
+ENV PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Expose the port
 EXPOSE 3000
 
-# Start the server
-CMD ["node", "dist/server/index.js"]
+# Copiar script de inicialização
+COPY --from=builder /app/start.sh ./
+RUN chmod +x start.sh
+
+# Start the server using the initialization script
+CMD ["/bin/sh", "./start.sh"]
