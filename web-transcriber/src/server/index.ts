@@ -30,7 +30,7 @@ const io = new Server(server, {
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../client')));
+app.use(express.static(path.join(__dirname, '../../dist/client')));
 
 // Set up routes
 setupRoutes(app, io);
@@ -75,7 +75,7 @@ server.listen(PORT, () => {
     // Log available routes if in debug mode
     if (config.debug) {
       console.log('Available routes:');
-      app._router.stack.forEach((middleware) => {
+      app._router.stack.forEach((middleware: any) => {
         if (middleware.route) {
           console.log(`${Object.keys(middleware.route.methods).join(', ').toUpperCase()}\t${middleware.route.path}`);
         }
