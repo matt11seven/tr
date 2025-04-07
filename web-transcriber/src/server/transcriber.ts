@@ -238,7 +238,7 @@ export class Transcriber {
         if (config.verbose) console.log(`[Job ${jobId}] Tentando método direto de download do YouTube...`);
         
         // Método 1: Usar o yt-dlp diretamente com as opções que funcionam no Python
-        const ytDlpProcess = spawn('python3', ['-m', 'yt_dlp', 
+        const ytDlpProcess = spawn('python', ['-m', 'yt_dlp', 
           '--ffmpeg-location', this.ffmpegPath,
           '--format', 'bestaudio/best',
           '--postprocessor-args', 'FFmpegExtractAudio:preferredcodec=mp3:preferredquality=192',
@@ -314,7 +314,6 @@ export class Transcriber {
             console.error(`[Job ${jobId}] ${error.message}`);
             reject(error);
           }
-        }
         });
       } catch (error) {
         console.error(`[Job ${jobId}] Error running Python script: ${error}`);
@@ -347,7 +346,7 @@ export class Transcriber {
         const outputTemplate = outputPath.replace(/\.mp3$/, '');
         
         // Usar exatamente as mesmas opções que funcionam no código Python (transcribe.py linha 145-157)
-        const ytDlpProcess = spawn('python3', ['-m', 'yt_dlp', 
+        const ytDlpProcess = spawn('python', ['-m', 'yt_dlp', 
           '--ffmpeg-location', this.ffmpegPath,
           '--format', 'bestaudio/best',
           '--extract-audio',
