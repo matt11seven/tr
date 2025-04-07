@@ -234,47 +234,69 @@ export class Transcriber {
         
         // Chamada para o script Python com parâmetros necessários
         // O script Python é responsável por baixar o áudio e convertê-lo para MP3
-        const pythonScript = spawn('python3', [
-          // Caminho absoluto para o script relativo à raiz do projeto
-          path.join(process.cwd(), '../transcribe.py'),
-          '--mode', 'download-only',
-          '--video-id', videoId,
-          '--output', outputPath
+        // No Docker, estamos usando o método direto de download
+        if (config.verbose) console.log(`[Job ${jobId}] Tentando método direto de download do YouTube...`);
+        
+        // Método 1: Usar o yt-dlp diretamente com as opções que funcionam no Python
+        const ytDlpProcess = spawn('python3', ['-m', 'yt_dlp', 
+          '--ffmpeg-location', this.ffmpegPath,
+          '--format', 'bestaudio/best',
+          '--postprocessor-args', 'FFmpegExtractAudio:preferredcodec=mp3:preferredquality=192',
+          '--extract-audio',
+          '--audio-format', 'mp3',
+          '--audio-quality', '192',
+          '--output', outputPath.replace(/\.mp3$/, ''),  // Remover a extensão como no Python
+          '--quiet',
+          '--no-warnings',
+          `https://www.youtube.com/watch?v=${videoId}`
         ]);
         
-        if (config.verbose) console.log(`[Job ${jobId}] Iniciando processo Python para download...`);
+        if (config.verbose) console.log(`[Job ${jobId}] Iniciando processo yt-dlp para download...`);
         
-        pythonScript.stdout.on('data', (data) => {
+        let progressRegex = /\[download\]\s+(\d+\.?\d*)%/;
+        let lastLogTime = Date.now();
+        
+        ytDlpProcess.stdout.on('data', (data: Buffer) => {
           const output = data.toString();
           if (config.verbose) {
-            console.log(`[Job ${jobId}] Python stdout: ${output.trim()}`);
+            console.log(`[Job ${jobId}] yt-dlp stdout: ${output.trim()}`);
           }
           
-          // Tentar extrair progresso do output, se disponível
-          const match = output.match(/(\d+)% concluído/);
+          // Extrair informações de progresso
+          const match = output.match(progressRegex);
           if (match && match[1]) {
-            const percent = parseInt(match[1], 10);
+            const percent = parseFloat(match[1]);
+            
+            // Atualizar progresso
             this.updateJobProgress(jobId, 'download', percent);
+            
+            // Log progress every 5 seconds if verbose
+            const now = Date.now();
+            if (config.verbose && (now - lastLogTime > 5000)) {
+              lastLogTime = now;
+              console.log(`[Job ${jobId}] Download progress: ${percent.toFixed(1)}%`);
+            }
           }
         });
         
-        pythonScript.stderr.on('data', (data) => {
+        ytDlpProcess.stderr.on('data', (data: Buffer) => {
           const output = data.toString();
           if (config.verbose) {
-            console.log(`[Job ${jobId}] Python stderr: ${output.trim()}`);
+            console.log(`[Job ${jobId}] yt-dlp stderr: ${output.trim()}`);
           }
         });
         
-        pythonScript.on('close', (code) => {
+        ytDlpProcess.on('close', (code: number) => {
           if (code === 0) {
-            if (config.verbose) console.log(`[Job ${jobId}] Python process completed successfully`);
+            if (config.verbose) console.log(`[Job ${jobId}] yt-dlp process completed successfully`);
             
             // Verificar se o arquivo foi criado
-            if (fs.existsSync(outputPath)) {
-              const stats = fs.statSync(outputPath);
+            const finalOutputPath = outputPath; // MP3 final
+            if (fs.existsSync(finalOutputPath)) {
+              const stats = fs.statSync(finalOutputPath);
               if (config.verbose) {
                 console.log(`[Job ${jobId}] Audio file downloaded:`, {
-                  path: outputPath,
+                  path: finalOutputPath,
                   size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
                   created: stats.birthtime
                 });
@@ -283,15 +305,16 @@ export class Transcriber {
               this.updateJobProgress(jobId, 'download', 100);
               resolve();
             } else {
-              const error = new Error(`Audio file not created: ${outputPath}`);
+              const error = new Error(`Audio file not created: ${finalOutputPath}`);
               console.error(`[Job ${jobId}] ${error.message}`);
               reject(error);
             }
           } else {
-            const error = new Error(`Python process exited with code ${code}`);
+            const error = new Error(`yt-dlp process exited with code ${code}`);
             console.error(`[Job ${jobId}] ${error.message}`);
             reject(error);
           }
+        }
         });
       } catch (error) {
         console.error(`[Job ${jobId}] Error running Python script: ${error}`);
