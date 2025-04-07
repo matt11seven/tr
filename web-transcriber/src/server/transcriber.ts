@@ -290,6 +290,8 @@ export class Transcriber {
           '--no-warnings',
           '--progress',
           '--newline',
+          // Tenta usar cookies de navegadores instalados para contornar restrições
+          '--cookies-from-browser', 'chrome',
           videoUrl
         ]);
         
@@ -441,6 +443,8 @@ export class Transcriber {
           '--retry-sleep', '5',
           '--force-ipv4',
           '--geo-bypass',
+          // Tenta usar cookies de navegadores instalados para contornar restrições
+          '--cookies-from-browser', 'firefox',
           videoUrl
         ]);
         
