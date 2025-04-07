@@ -11,7 +11,10 @@ COPY . .
 
 # Install ffmpeg, python and yt-dlp
 RUN apk add --no-cache ffmpeg python3 py3-pip
+RUN pip3 install --upgrade pip
 RUN pip3 install yt-dlp
+# Verify yt-dlp installation
+RUN python3 -m yt_dlp --version
 
 # Build the application
 RUN npm run build
@@ -23,7 +26,10 @@ WORKDIR /app
 
 # Install ffmpeg, python and yt-dlp in production image
 RUN apk add --no-cache ffmpeg python3 py3-pip
+RUN pip3 install --upgrade pip
 RUN pip3 install yt-dlp
+# Verify yt-dlp installation
+RUN python3 -m yt_dlp --version
 
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
@@ -37,6 +43,7 @@ RUN mkdir -p audios transcricoes
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
+ENV PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Expose the port
 EXPOSE 3000

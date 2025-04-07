@@ -227,7 +227,8 @@ export class Transcriber {
         }
         
         // Comando yt-dlp para baixar apenas o áudio em formato mp3
-        const ytDlpProcess = spawn('yt-dlp', [
+        // Usar python3 -m yt_dlp em vez de chamar yt-dlp diretamente
+        const ytDlpProcess = spawn('python3', ['-m', 'yt_dlp', 
           '-f', 'bestaudio',
           '-o', outputPath,
           '--extract-audio',
