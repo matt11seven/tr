@@ -345,91 +345,234 @@ export class Transcriber {
         // Obter o template de saída (sem extensão) como no código Python
         const outputTemplate = outputPath.replace(/\.mp3$/, '');
         
-        // Usar exatamente as mesmas opções que funcionam no código Python (transcribe.py linha 145-157)
-        const ytDlpProcess = spawn('python', ['-m', 'yt_dlp', 
+        // Detectar navegadores instalados para cookies
+        const isWindows = process.platform === 'win32';
+        const possibleBrowsers = isWindows ? ['chrome', 'edge', 'firefox', 'opera'] : ['chrome', 'firefox', 'opera'];
+        
+        // Usar exatamente as mesmas opções que funcionam no código Python, incluindo cookies de navegador
+        // Para usar yt-dlp como módulo Python
+        const ytDlpArgs = [
+          '-m', 'yt_dlp',
           '--ffmpeg-location', this.ffmpegPath,
           '--format', 'bestaudio/best',
           '--extract-audio',
           '--audio-format', 'mp3',
           '--audio-quality', '192',
           '--output', outputTemplate,
-          '--quiet',
-          '--no-warnings',
-          videoUrl
-        ]);
-        
-        let lastLogTime = Date.now();
-        let progressRegex = /\[download\]\s+(\d+\.?\d*)%/;
-        
-        ytDlpProcess.stdout.on('data', (data) => {
-          const output = data.toString();
-          if (config.verbose) {
-            console.log(`[Job ${jobId}] yt-dlp output: ${output.trim()}`);
-          }
-          
-          // Extrair informações de progresso
-          const match = output.match(progressRegex);
-          if (match && match[1]) {
-            const percent = parseFloat(match[1]);
-            
-            // Atualizar progresso
-            this.updateJobProgress(jobId, 'download', percent);
-            
-            // Log progress every 5 seconds if verbose
-            const now = Date.now();
-            if (config.verbose && (now - lastLogTime > 5000)) {
-              lastLogTime = now;
-              console.log(`[Job ${jobId}] Download progress: ${percent.toFixed(1)}%`);
-            }
-          }
-        });
-        
-        ytDlpProcess.stderr.on('data', (data) => {
-          const output = data.toString();
-          if (config.verbose) {
-            console.log(`[Job ${jobId}] yt-dlp stderr: ${output.trim()}`);
-          }
-        });
-        
-        ytDlpProcess.on('close', (code) => {
-          if (code === 0) {
-            if (config.verbose) console.log(`[Job ${jobId}] yt-dlp process completed successfully`);
-            
-            // Verificar se o arquivo foi criado
-            if (fs.existsSync(outputPath)) {
-              const stats = fs.statSync(outputPath);
-              if (config.verbose) {
-                console.log(`[Job ${jobId}] Audio file downloaded:`, {
-                  path: outputPath,
-                  size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
-                  created: stats.birthtime
-                });
-              }
-              
-              this.updateJobProgress(jobId, 'download', 100);
-              resolve();
-            } else {
-              const error = new Error(`Audio file not created: ${outputPath}`);
-              console.error(`[Job ${jobId}] ${error.message}`);
-              reject(error);
-            }
-          } else {
-            const error = new Error(`yt-dlp process exited with code ${code}`);
-            console.error(`[Job ${jobId}] ${error.message}`);
-            reject(error);
-          }
-        });
-        
-        ytDlpProcess.on('error', (err) => {
-          console.error(`[Job ${jobId}] Error in yt-dlp process:`, err);
-          reject(new Error(`yt-dlp error: ${err.message}`));
-        });
-        
+          '--no-warnings'
+        ];
+
+        // Implementar mecanismo de fallback tentando diferentes navegadores
+        return this.tryDownloadWithBrowsers(jobId, ytDlpArgs, possibleBrowsers, videoUrl, outputPath, resolve, reject);
       } catch (error) {
-        console.error(`[Job ${jobId}] Unexpected error in downloadVideo:`, error);
+        console.error(`[Job ${jobId}] Unexpected error in downloadWithYtDlp:`, error);
         reject(error);
       }
     });
+  }
+
+  private tryDownloadWithBrowsers(jobId: string, baseArgs: string[], browsers: string[], videoUrl: string, outputPath: string, resolve: () => void, reject: (err: Error) => void, browserIndex: number = 0): void {
+    try {
+      // Se já tentamos todos os navegadores, tente sem cookies
+      if (browserIndex >= browsers.length) {
+        if (config.verbose) console.log(`[Job ${jobId}] All browser cookie attempts failed, trying without cookies`);
+        this.tryFinalDownload(jobId, baseArgs, videoUrl, outputPath, resolve, reject);
+        return;
+      }
+
+      const browser = browsers[browserIndex];
+      if (config.verbose) console.log(`[Job ${jobId}] Trying download with ${browser} cookies (attempt ${browserIndex + 1}/${browsers.length})`);
+
+      // Copiar os argumentos base e adicionar cookies do navegador atual
+      const args = [...baseArgs];
+      args.push('--cookies-from-browser');
+      args.push(browser);
+      
+      // Adicionar URL no final
+      args.push(videoUrl);
+
+      if (config.verbose) console.log(`[Job ${jobId}] Command: python ${args.join(' ')}`);
+      
+      const ytDlpProcess = spawn('python', args);
+      
+      let lastLogTime = Date.now();
+      let progressRegex = /\[download\]\s+(\d+\.?\d*)%/;
+      
+      ytDlpProcess.stdout.on('data', (data) => {
+        const output = data.toString();
+        if (config.verbose) {
+          console.log(`[Job ${jobId}] yt-dlp output: ${output.trim()}`);
+        }
+        
+        // Extrair informações de progresso
+        const match = output.match(progressRegex);
+        if (match && match[1]) {
+          const percent = parseFloat(match[1]);
+          
+          // Atualizar progresso
+          this.updateJobProgress(jobId, 'download', percent);
+          
+          // Log progress every 5 seconds if verbose
+          const now = Date.now();
+          if (config.verbose && (now - lastLogTime > 5000)) {
+            lastLogTime = now;
+            console.log(`[Job ${jobId}] Download progress: ${percent.toFixed(1)}%`);
+          }
+        }
+      });
+      
+      ytDlpProcess.stderr.on('data', (data) => {
+        const output = data.toString();
+        if (config.verbose) {
+          console.log(`[Job ${jobId}] yt-dlp stderr: ${output.trim()}`);
+        }
+      });
+      
+      ytDlpProcess.on('close', (code) => {
+        if (code === 0) {
+          if (config.verbose) console.log(`[Job ${jobId}] yt-dlp process completed successfully with ${browsers[browserIndex]} cookies`);
+          
+          // Verificar se o arquivo foi criado
+          if (fs.existsSync(outputPath)) {
+            const stats = fs.statSync(outputPath);
+            if (config.verbose) {
+              console.log(`[Job ${jobId}] Audio file downloaded:`, {
+                path: outputPath,
+                size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
+                created: stats.birthtime,
+                browser: browsers[browserIndex]
+              });
+            }
+            
+            this.updateJobProgress(jobId, 'download', 100);
+            resolve();
+          } else {
+            const error = new Error(`Audio file not created: ${outputPath}`);
+            console.error(`[Job ${jobId}] ${error.message}`);
+            // Tentar próximo navegador
+            this.tryDownloadWithBrowsers(jobId, baseArgs, browsers, videoUrl, outputPath, resolve, reject, browserIndex + 1);
+          }
+        } else {
+          console.warn(`[Job ${jobId}] Failed with ${browsers[browserIndex]} cookies, trying next browser...`);
+          // Tentar próximo navegador em caso de falha
+          this.tryDownloadWithBrowsers(jobId, baseArgs, browsers, videoUrl, outputPath, resolve, reject, browserIndex + 1);
+        }
+      });
+      
+      ytDlpProcess.on('error', (err) => {
+        console.error(`[Job ${jobId}] Error in yt-dlp process:`, err);
+        reject(new Error(`yt-dlp error: ${err.message}`));
+      });
+    } catch (error) {
+      console.error(`[Job ${jobId}] Unexpected error in tryDownloadWithBrowsers:`, error);
+      reject(error as Error);
+    }
+  }
+
+  private tryFinalDownload(jobId: string, baseArgs: string[], videoUrl: string, outputPath: string, resolve: () => void, reject: (err: Error) => void): void {
+    try {
+      if (config.verbose) console.log(`[Job ${jobId}] Attempting final download without cookies...`);
+      
+      // Copiar argumentos base, remover opções de cookies se existirem
+      const finalArgs = [...baseArgs];
+      
+      // Adicionar opções extras para contornar restrições
+      finalArgs.push('--no-check-certificate');
+      finalArgs.push('--ignore-errors');
+      finalArgs.push('--extractor-args');
+      finalArgs.push('youtube:player_client=android');
+      finalArgs.push('--force-ipv4');
+      finalArgs.push('--geo-bypass');
+      
+      // Adicionar URL no final
+      finalArgs.push(videoUrl);
+      
+      if (config.verbose) console.log(`[Job ${jobId}] Final attempt command: python ${finalArgs.join(' ')}`);
+      
+      const ytDlpProcess = spawn('python', finalArgs);
+      
+      let lastLogTime = Date.now();
+      let progressRegex = /\[download\]\s+(\d+\.?\d*)%/;
+      
+      ytDlpProcess.stdout.on('data', (data) => {
+        const output = data.toString();
+        if (config.verbose) {
+          console.log(`[Job ${jobId}] yt-dlp output: ${output.trim()}`);
+        }
+        
+        // Extrair informações de progresso
+        const match = output.match(progressRegex);
+        if (match && match[1]) {
+          const percent = parseFloat(match[1]);
+          
+          // Atualizar progresso
+          this.updateJobProgress(jobId, 'download', percent);
+          
+          // Log progress every 5 seconds if verbose
+          const now = Date.now();
+          if (config.verbose && (now - lastLogTime > 5000)) {
+            lastLogTime = now;
+            console.log(`[Job ${jobId}] Download progress: ${percent.toFixed(1)}%`);
+          }
+        }
+      });
+      
+      ytDlpProcess.stderr.on('data', (data) => {
+        const output = data.toString();
+        if (config.verbose) {
+          console.log(`[Job ${jobId}] yt-dlp stderr: ${output.trim()}`);
+        }
+      });
+      
+      ytDlpProcess.on('close', (code) => {
+        if (code === 0) {
+          if (config.verbose) console.log(`[Job ${jobId}] Final download attempt completed successfully`);
+          
+          // Verificar se o arquivo foi criado
+          if (fs.existsSync(outputPath)) {
+            const stats = fs.statSync(outputPath);
+            if (config.verbose) {
+              console.log(`[Job ${jobId}] Audio file downloaded:`, {
+                path: outputPath,
+                size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
+                created: stats.birthtime
+              });
+            }
+            
+            this.updateJobProgress(jobId, 'download', 100);
+            resolve();
+          } else {
+            // Última tentativa falhou, tentar com método alternativo
+            if (config.verbose) console.log(`[Job ${jobId}] Final attempt failed, trying alternative download method`);
+            this.downloadWithYtDlpAlternative(jobId, videoUrl, outputPath)
+              .then(resolve)
+              .catch(reject);
+          }
+        } else {
+          if (config.verbose) console.log(`[Job ${jobId}] Final attempt failed with code ${code}, trying alternative download method`);
+          // Tentar método alternativo
+          this.downloadWithYtDlpAlternative(jobId, videoUrl, outputPath)
+            .then(resolve)
+            .catch(reject);
+        }
+      });
+      
+      ytDlpProcess.on('error', (err) => {
+        console.error(`[Job ${jobId}] Error in final download attempt:`, err);
+        // Tentar método alternativo
+        if (config.verbose) console.log(`[Job ${jobId}] Error in final attempt, trying alternative download method`);
+        this.downloadWithYtDlpAlternative(jobId, videoUrl, outputPath)
+          .then(resolve)
+          .catch(reject);
+      });
+    } catch (error) {
+      console.error(`[Job ${jobId}] Unexpected error in tryFinalDownload:`, error);
+      // Tentar método alternativo
+      if (config.verbose) console.log(`[Job ${jobId}] Error in final attempt, trying alternative download method`);
+      this.downloadWithYtDlpAlternative(jobId, videoUrl, outputPath)
+        .then(resolve)
+        .catch(reject);
+    }
   }
 
   private async transcribeAudio(
