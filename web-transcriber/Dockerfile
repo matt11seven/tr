@@ -11,8 +11,7 @@ COPY . .
 
 # Install ffmpeg, python and yt-dlp
 RUN apk add --no-cache ffmpeg python3 py3-pip
-RUN pip3 install --upgrade pip
-RUN pip3 install yt-dlp
+RUN pip3 install yt-dlp --break-system-packages
 # Verify yt-dlp installation
 RUN python3 -m yt_dlp --version
 
@@ -26,8 +25,7 @@ WORKDIR /app
 
 # Install ffmpeg, python and yt-dlp in production image
 RUN apk add --no-cache ffmpeg python3 py3-pip
-RUN pip3 install --upgrade pip
-RUN pip3 install yt-dlp
+RUN pip3 install yt-dlp --break-system-packages
 # Verify yt-dlp installation
 RUN python3 -m yt_dlp --version
 

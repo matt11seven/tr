@@ -19,7 +19,7 @@ if python3 -m yt_dlp --version > /dev/null 2>&1; then
   echo "yt-dlp instalado corretamente"
 else
   echo "Tentando reinstalar yt-dlp..."
-  pip3 install --upgrade yt-dlp
+  pip3 install --upgrade yt-dlp --break-system-packages
   
   if python3 -m yt_dlp --version > /dev/null 2>&1; then
     echo "yt-dlp reinstalado com sucesso"
