@@ -1,0 +1,55 @@
+{
+  "name": "youtube-transcriber",
+  "description": "YouTube video transcription web application with speaker detection",
+  "icon": "https://raw.githubusercontent.com/easypanel-io/icons/main/png/nodejs.png",
+  "variables": [
+    {
+      "name": "ASSEMBLYAI_API_KEY",
+      "description": "Your AssemblyAI API key",
+      "required": true
+    },
+    {
+      "name": "SECRET_KEY",
+      "description": "Secret key for session",
+      "required": true,
+      "defaultValue": "change_this_to_a_secure_random_string"
+    }
+  ],
+  "services": [
+    {
+      "id": "app",
+      "name": "App",
+      "type": "docker-compose",
+      "config": {
+        "version": "3.8",
+        "services": {
+          "app": {
+            "build": {
+              "context": ".",
+              "dockerfile": "Dockerfile"
+            },
+            "restart": "always",
+            "ports": [
+              "3000:3000"
+            ],
+            "environment": [
+              "NODE_ENV=production",
+              "PORT=3000",
+              "FFMPEG_PATH=/usr/bin/ffmpeg",
+              "ASSEMBLYAI_API_KEY=${ASSEMBLYAI_API_KEY}",
+              "SECRET_KEY=${SECRET_KEY}"
+            ],
+            "volumes": [
+              "audio_data:/app/audios",
+              "transcript_data:/app/transcricoes"
+            ]
+          }
+        },
+        "volumes": {
+          "audio_data": {},
+          "transcript_data": {}
+        }
+      }
+    }
+  ]
+}

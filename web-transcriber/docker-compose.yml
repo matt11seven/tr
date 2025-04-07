@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - FFMPEG_PATH=/usr/bin/ffmpeg
+      - ASSEMBLYAI_API_KEY=${ASSEMBLYAI_API_KEY}
+    volumes:
+      - audio_data:/app/audios
+      - transcript_data:/app/transcricoes
+
+volumes:
+  audio_data:
+  transcript_data:
