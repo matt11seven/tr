@@ -34,6 +34,8 @@ RUN mkdir -p audios transcricoes
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
+ENV VERBOSE=true
+ENV DEBUG=true
 
 # Expose the port
 EXPOSE 3000
