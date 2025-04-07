@@ -277,21 +277,16 @@ export class Transcriber {
         // Obter o template de saída (sem extensão) como no código Python
         const outputTemplate = outputPath.replace(/\.mp3$/, '');
         
-        // Usar as mesmas opções que funcionam no código Python
+        // Usar exatamente as mesmas opções que funcionam no código Python (transcribe.py linha 145-157)
         const ytDlpProcess = spawn('python3', ['-m', 'yt_dlp', 
           '--ffmpeg-location', this.ffmpegPath,
           '--format', 'bestaudio/best',
-          '--postprocessor-args', '-acodec libmp3lame -ab 192k',
           '--extract-audio',
           '--audio-format', 'mp3',
           '--audio-quality', '192',
           '--output', outputTemplate,
           '--quiet',
           '--no-warnings',
-          '--progress',
-          '--newline',
-          // Tenta usar cookies de navegadores instalados para contornar restrições
-          '--cookies-from-browser', 'chrome',
           videoUrl
         ]);
         
@@ -422,19 +417,16 @@ export class Transcriber {
         // Obter o template de saída (sem extensão) como no código Python
         const outputTemplate = outputPath.replace(/\.mp3$/, '');
         
-        // Usar as mesmas opções que funcionam no código Python, com opções adicionais para contornar restrições
+        // Usar uma configuração simplificada com opções extras para bypass
         const ytDlpProcess = spawn('python3', ['-m', 'yt_dlp', 
           '--ffmpeg-location', this.ffmpegPath,
           '--format', 'bestaudio/best',
-          '--postprocessor-args', '-acodec libmp3lame -ab 192k',
           '--extract-audio',
           '--audio-format', 'mp3',
           '--audio-quality', '192',
           '--output', outputTemplate,
           '--quiet',
           '--no-warnings',
-          '--progress',
-          '--newline',
           // Opções adicionais para contornar restrições
           '--no-check-certificate',
           '--ignore-errors',
@@ -443,8 +435,6 @@ export class Transcriber {
           '--retry-sleep', '5',
           '--force-ipv4',
           '--geo-bypass',
-          // Tenta usar cookies de navegadores instalados para contornar restrições
-          '--cookies-from-browser', 'firefox',
           videoUrl
         ]);
         
