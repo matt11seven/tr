@@ -6,6 +6,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import { v4 as uuidv4 } from 'uuid';
 import { Server } from 'socket.io';
 import ytdl from 'ytdl-core';
+import * as puppeteer from 'puppeteer';
 import config from './config';
 
 // Types
@@ -212,15 +213,68 @@ export class Transcriber {
   }
 
   private async downloadVideo(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
+    // Tentar primeira download direta sem cookies
+    try {
+      if (config.verbose) console.log(`[Job ${jobId}] Iniciando download simples para: ${videoUrl}`);
+      await this.downloadSimple(jobId, videoUrl, outputPath);
+      return; // Se o download simples funcionar, retorna com sucesso
+    } catch (error: any) {
+      // Se o download simples falhar, tenta com o mecanismo de fallback
+      if (config.verbose) {
+        console.log(`[Job ${jobId}] Download simples falhou: ${error.message}`);
+        console.log(`[Job ${jobId}] Tentando com mecanismo de Chrome headless para gerar cookies...`);
+      }
+      // Não propagar o erro, continuar para o próximo método
+    }
+
+    // Tenta o download com cookies gerados automaticamente pelo Chrome headless
+    try {
+      if (config.verbose) console.log(`[Job ${jobId}] Gerando cookies frescos com Chrome headless...`);
+      await this.downloadWithChromeCookies(jobId, videoUrl, outputPath);
+      return; // Se o Chrome headless funcionar, retorna com sucesso
+    } catch (error: any) {
+      // Se o Chrome headless falhar, tenta com cookies de navegadores instalados
+      if (config.verbose) {
+        console.log(`[Job ${jobId}] Chrome headless falhou: ${error.message}`);
+        console.log(`[Job ${jobId}] Tentando com cookies de navegadores instalados...`);
+      }
+      // Não propagar o erro, continuar para o próximo método
+    }
+
+    // Tenta o mecanismo de fallback com cookies de navegador instalado
+    try {
+      await this.downloadWithYtDlp(jobId, videoUrl, outputPath);
+      return; // Se o fallback funcionar, retorna com sucesso
+    } catch (error: any) {
+      // Se o fallback falhar, tenta com ytdl-core
+      if (config.verbose) {
+        console.log(`[Job ${jobId}] Fallback com cookies falhou: ${error.message}`);
+        console.log(`[Job ${jobId}] Tentando com ytdl-core...`);
+      }
+      // Não propagar o erro, continuar para o próximo método
+    }
+
+    // Tenta com ytdl-core como último recurso
+    try {
+      await this.downloadWithYtdlCore(jobId, videoUrl, outputPath);
+      return; // Se ytdl-core funcionar, retorna com sucesso
+    } catch (error: any) {
+      // Todas as tentativas falharam, propaga o erro
+      console.error(`[Job ${jobId}] Todas as tentativas de download falharam`);
+      throw new Error(`Não foi possível baixar o vídeo após múltiplas tentativas: ${error.message}`);
+    }
+  }
+
+  // Método simples sem cookies para primeira tentativa
+  private async downloadSimple(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
     // Extrair o ID do vídeo para usar com o script Python
     const videoId = this.extractVideoId(videoUrl);
     if (!videoId) {
       throw new Error(`Could not extract video ID from URL: ${videoUrl}`);
     }
     
-    if (config.verbose) console.log(`[Job ${jobId}] Chamando script Python para download...`);
+    if (config.verbose) console.log(`[Job ${jobId}] Tentando método direto de download do YouTube...`);
     
-    // Usar o script Python existente que está funcionando corretamente
     return new Promise<void>((resolve, reject) => {
       try {
         // Verificar se o diretório de áudio existe
@@ -232,12 +286,7 @@ export class Transcriber {
         // Calcular o nome base do arquivo de saída sem extensão
         const outputBasename = path.basename(outputPath, '.mp3');
         
-        // Chamada para o script Python com parâmetros necessários
-        // O script Python é responsável por baixar o áudio e convertê-lo para MP3
-        // No Docker, estamos usando o método direto de download
-        if (config.verbose) console.log(`[Job ${jobId}] Tentando método direto de download do YouTube...`);
-        
-        // Método 1: Usar o yt-dlp diretamente com as opções que funcionam no Python
+        // Método 1: Usar o yt-dlp diretamente com as opções básicas
         const ytDlpProcess = spawn('python', ['-m', 'yt_dlp', 
           '--ffmpeg-location', this.ffmpegPath,
           '--format', 'bestaudio/best',
@@ -251,7 +300,7 @@ export class Transcriber {
           `https://www.youtube.com/watch?v=${videoId}`
         ]);
         
-        if (config.verbose) console.log(`[Job ${jobId}] Iniciando processo yt-dlp para download...`);
+        if (config.verbose) console.log(`[Job ${jobId}] Iniciando processo yt-dlp para download simples...`);
         
         let progressRegex = /\[download\]\s+(\d+\.?\d*)%/;
         let lastLogTime = Date.now();
@@ -288,14 +337,14 @@ export class Transcriber {
         
         ytDlpProcess.on('close', (code: number) => {
           if (code === 0) {
-            if (config.verbose) console.log(`[Job ${jobId}] yt-dlp process completed successfully`);
+            if (config.verbose) console.log(`[Job ${jobId}] Download simples completado com sucesso`);
             
             // Verificar se o arquivo foi criado
             const finalOutputPath = outputPath; // MP3 final
             if (fs.existsSync(finalOutputPath)) {
               const stats = fs.statSync(finalOutputPath);
               if (config.verbose) {
-                console.log(`[Job ${jobId}] Audio file downloaded:`, {
+                console.log(`[Job ${jobId}] Arquivo de áudio baixado:`, {
                   path: finalOutputPath,
                   size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
                   created: stats.birthtime
@@ -305,24 +354,235 @@ export class Transcriber {
               this.updateJobProgress(jobId, 'download', 100);
               resolve();
             } else {
-              const error = new Error(`Audio file not created: ${finalOutputPath}`);
+              const error = new Error(`Arquivo de áudio não foi criado: ${finalOutputPath}`);
               console.error(`[Job ${jobId}] ${error.message}`);
               reject(error);
             }
           } else {
-            const error = new Error(`yt-dlp process exited with code ${code}`);
+            const error = new Error(`Processo yt-dlp encerrou com código ${code}`);
             console.error(`[Job ${jobId}] ${error.message}`);
             reject(error);
           }
         });
       } catch (error) {
-        console.error(`[Job ${jobId}] Error running Python script: ${error}`);
+        console.error(`[Job ${jobId}] Erro executando script Python: ${error}`);
         reject(error);
       }
     });
   }
   
 
+
+  // Método para gerar cookies automaticamente com Chrome headless
+  private async downloadWithChromeCookies(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
+    return new Promise<void>(async (resolve, reject) => {
+      if (config.verbose) console.log(`[Job ${jobId}] Iniciando Chrome headless para gerar cookies...`);
+      
+      let browser: puppeteer.Browser | null = null;
+      let cookiesFilePath = '';
+      
+      try {
+        // Garantir que o diretório existe
+        const audioDir = path.dirname(outputPath);
+        if (!fs.existsSync(audioDir)) {
+          fs.mkdirSync(audioDir, { recursive: true });
+        }
+        
+        // Pasta temporária para armazenar cookies
+        const tempDir = path.join(process.cwd(), 'temp');
+        if (!fs.existsSync(tempDir)) {
+          fs.mkdirSync(tempDir, { recursive: true });
+        }
+        
+        cookiesFilePath = path.join(tempDir, `youtube_cookies_${jobId}.txt`);
+        
+        // Iniciar Chrome headless
+        if (config.verbose) console.log(`[Job ${jobId}] Iniciando Chrome headless...`);
+        browser = await puppeteer.launch({
+          headless: true,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+            '--window-size=1280,720'
+          ]
+        });
+        
+        // Criar nova página
+        const page = await browser.newPage();
+        
+        // Configurar viewport e user agent como um navegador normal
+        await page.setViewport({ width: 1280, height: 720 });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36');
+        
+        // Extrair ID do vídeo
+        const videoId = this.extractVideoId(videoUrl);
+        if (!videoId) {
+          throw new Error(`Could not extract video ID from URL: ${videoUrl}`);
+        }
+        
+        // Navegar para a página inicial do YouTube primeiro
+        if (config.verbose) console.log(`[Job ${jobId}] Navegando para YouTube...`);
+        await page.goto('https://www.youtube.com/', { waitUntil: 'networkidle2' });
+        
+        // Pequena pausa para permitir que cookies iniciais sejam definidos
+        await page.waitForFunction('document.readyState === "complete"');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Navegar para a página do vídeo
+        if (config.verbose) console.log(`[Job ${jobId}] Navegando para a página do vídeo...`);
+        await page.goto(`https://www.youtube.com/watch?v=${videoId}`, { waitUntil: 'networkidle2' });
+        
+        // Aguardar mais um tempo para garantir que todos os cookies foram definidos
+        await page.waitForFunction('document.readyState === "complete"');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Extrair os cookies
+        const cookies = await page.cookies();
+        if (config.verbose) console.log(`[Job ${jobId}] ${cookies.length} cookies obtidos`);
+        
+        // Salvar cookies em arquivo de texto no formato Netscape Cookie File
+        // Formato: domain \t domain_initial_dot \t path \t secure \t expires \t name \t value
+        const cookieFileContent = cookies.map((cookie: any) => {
+          const domain = cookie.domain.startsWith('.') ? cookie.domain : `.${cookie.domain}`;
+          const secure = cookie.secure ? 'TRUE' : 'FALSE';
+          const httpOnly = cookie.httpOnly ? 'TRUE' : 'FALSE';
+          // Expiration date in seconds since UNIX epoch
+          const expires = Math.floor(new Date(cookie.expires !== undefined ? (typeof cookie.expires === 'number' ? cookie.expires * 1000 : cookie.expires) : Date.now() + 86400000).getTime() / 1000);
+          return `${cookie.domain}\tTRUE\t${cookie.path}\t${secure}\t${expires}\t${cookie.name}\t${cookie.value}`;
+        }).join('\n');
+        
+        // Salvar para arquivo
+        fs.writeFileSync(cookiesFilePath, cookieFileContent);
+        if (config.verbose) console.log(`[Job ${jobId}] Cookies salvos em ${cookiesFilePath}`);
+        
+        // Fechar navegador
+        await browser.close();
+        browser = null;
+        
+        // Agora usar yt-dlp com os cookies gerados
+        if (config.verbose) console.log(`[Job ${jobId}] Usando cookies gerados para download...`);
+        
+        // Obter o template de saída (sem extensão)
+        const outputTemplate = outputPath.replace(/\.mp3$/, '');
+        
+        // Usar o yt-dlp com os cookies
+        const ytDlpProcess = spawn('python', [
+          '-m', 'yt_dlp',
+          '--ffmpeg-location', this.ffmpegPath,
+          '--format', 'bestaudio/best',
+          '--extract-audio',
+          '--audio-format', 'mp3',
+          '--audio-quality', '192',
+          '--output', outputTemplate,
+          '--cookies', cookiesFilePath,
+          '--no-warnings',
+          '--no-check-certificate',
+          videoUrl
+        ]);
+        
+        let lastLogTime = Date.now();
+        let progressRegex = /\[download\]\s+(\d+\.?\d*)%/;
+        
+        ytDlpProcess.stdout.on('data', (data) => {
+          const output = data.toString();
+          if (config.verbose) {
+            console.log(`[Job ${jobId}] yt-dlp output: ${output.trim()}`);
+          }
+          
+          // Extrair informações de progresso
+          const match = output.match(progressRegex);
+          if (match && match[1]) {
+            const percent = parseFloat(match[1]);
+            
+            // Atualizar progresso
+            this.updateJobProgress(jobId, 'download', percent);
+            
+            // Log progress every 5 seconds if verbose
+            const now = Date.now();
+            if (config.verbose && (now - lastLogTime > 5000)) {
+              lastLogTime = now;
+              console.log(`[Job ${jobId}] Download progress: ${percent.toFixed(1)}%`);
+            }
+          }
+        });
+        
+        ytDlpProcess.stderr.on('data', (data) => {
+          const output = data.toString();
+          if (config.verbose) {
+            console.log(`[Job ${jobId}] yt-dlp stderr: ${output.trim()}`);
+          }
+        });
+        
+        ytDlpProcess.on('close', (code) => {
+          // Limpar o arquivo de cookies
+          if (fs.existsSync(cookiesFilePath)) {
+            try {
+              fs.unlinkSync(cookiesFilePath);
+              if (config.verbose) console.log(`[Job ${jobId}] Arquivo de cookies removido`);
+            } catch (err) {
+              console.error(`[Job ${jobId}] Erro ao remover arquivo de cookies:`, err);
+            }
+          }
+          
+          if (code === 0) {
+            if (config.verbose) console.log(`[Job ${jobId}] Download com Chrome cookies concluído com sucesso`);
+            
+            // Verificar se o arquivo foi criado
+            if (fs.existsSync(outputPath)) {
+              const stats = fs.statSync(outputPath);
+              if (config.verbose) {
+                console.log(`[Job ${jobId}] Audio file downloaded:`, {
+                  path: outputPath,
+                  size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
+                  created: stats.birthtime
+                });
+              }
+              
+              this.updateJobProgress(jobId, 'download', 100);
+              resolve();
+            } else {
+              const error = new Error(`Audio file not created: ${outputPath}`);
+              console.error(`[Job ${jobId}] ${error.message}`);
+              reject(error);
+            }
+          } else {
+            const error = new Error(`yt-dlp process with Chrome cookies exited with code ${code}`);
+            console.error(`[Job ${jobId}] ${error.message}`);
+            reject(error);
+          }
+        });
+        
+        ytDlpProcess.on('error', (err) => {
+          console.error(`[Job ${jobId}] Error in yt-dlp process with Chrome cookies:`, err);
+          reject(new Error(`yt-dlp error with Chrome cookies: ${err.message}`));
+        });
+        
+      } catch (error) {
+        // Limpar recursos em caso de erro
+        if (browser) {
+          try {
+            await browser.close();
+          } catch (err) {
+            console.error(`[Job ${jobId}] Error closing browser:`, err);
+          }
+        }
+        
+        if (cookiesFilePath && fs.existsSync(cookiesFilePath)) {
+          try {
+            fs.unlinkSync(cookiesFilePath);
+          } catch (err) {
+            console.error(`[Job ${jobId}] Error removing cookies file:`, err);
+          }
+        }
+        
+        console.error(`[Job ${jobId}] Unexpected error in downloadWithChromeCookies:`, error);
+        reject(error);
+      }
+    });
+  }
 
   private async downloadWithYtDlp(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
@@ -575,6 +835,8 @@ export class Transcriber {
     }
   }
 
+
+
   private async transcribeAudio(
     jobId: string, 
     audioPath: string, 
@@ -737,10 +999,14 @@ export class Transcriber {
         
         // Obter informações do vídeo
         ytdl.getInfo(videoUrl).then(info => {
-          if (config.verbose) console.log(`[Job ${jobId}] Informações do vídeo obtidas com sucesso`);
+          if (config.verbose) console.log(`[Job ${jobId}] ytdl-core: Informações do vídeo obtidas: ${info.videoDetails.title}`);
           
           // Selecionar o formato de áudio de melhor qualidade
           const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
+          if (audioFormats.length === 0) {
+            throw new Error('Nenhum formato de áudio disponível');
+          }
+          
           const bestAudio = audioFormats.sort((a, b) => {
             const aBitrate = a.audioBitrate || 0;
             const bBitrate = b.audioBitrate || 0;
