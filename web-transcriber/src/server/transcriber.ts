@@ -5,6 +5,7 @@ import axios from 'axios';
 import ffmpeg from 'fluent-ffmpeg';
 import { v4 as uuidv4 } from 'uuid';
 import { Server } from 'socket.io';
+import ytdl from 'ytdl-core';
 import config from './config';
 
 // Types
@@ -217,7 +218,14 @@ export class Transcriber {
     } catch (error) {
       if (config.verbose) console.log(`[Job ${jobId}] Método principal falhou, tentando método alternativo...`);
       // Tentar método alternativo com diferentes opções
-      return this.downloadWithYtDlpAlternative(jobId, videoUrl, outputPath);
+      try {
+        await this.downloadWithYtDlpAlternative(jobId, videoUrl, outputPath);
+        return;
+      } catch (error2) {
+        if (config.verbose) console.log(`[Job ${jobId}] Método alternativo falhou, tentando método com ytdl-core...`);
+        // Tentar método com ytdl-core como última opção
+        return this.downloadWithYtdlCore(jobId, videoUrl, outputPath);
+      }
     }
   }
 
@@ -239,21 +247,22 @@ export class Transcriber {
           fs.mkdirSync(audioDir, { recursive: true });
         }
         
-        // Comando yt-dlp para baixar apenas o áudio em formato mp3
-        // Usar python3 -m yt_dlp em vez de chamar yt-dlp diretamente
+        // Obter o template de saída (sem extensão) como no código Python
+        const outputTemplate = outputPath.replace(/\.mp3$/, '');
+        
+        // Usar as mesmas opções que funcionam no código Python
         const ytDlpProcess = spawn('python3', ['-m', 'yt_dlp', 
-          '-f', 'bestaudio',
-          '-o', outputPath,
+          '--ffmpeg-location', this.ffmpegPath,
+          '--format', 'bestaudio/best',
+          '--postprocessor-args', '-acodec libmp3lame -ab 192k',
           '--extract-audio',
           '--audio-format', 'mp3',
-          '--audio-quality', '0',
-          '--newline', // Para obter saída linha por linha
+          '--audio-quality', '192',
+          '--output', outputTemplate,
+          '--quiet',
+          '--no-warnings',
           '--progress',
-          '--no-check-certificate', // Ignorar erros de certificado
-          '--ignore-errors', // Ignorar erros não fatais
-          '--no-warnings', // Não mostrar avisos
-          '--force-ipv4', // Forçar IPv4 para evitar bloqueios
-          '--geo-bypass', // Tentar contornar restrições geográficas
+          '--newline',
           videoUrl
         ]);
         
@@ -381,18 +390,25 @@ export class Transcriber {
           fs.mkdirSync(audioDir, { recursive: true });
         }
         
-        // Comando yt-dlp com opções alternativas para contornar restrições
+        // Obter o template de saída (sem extensão) como no código Python
+        const outputTemplate = outputPath.replace(/\.mp3$/, '');
+        
+        // Usar as mesmas opções que funcionam no código Python, com opções adicionais para contornar restrições
         const ytDlpProcess = spawn('python3', ['-m', 'yt_dlp', 
+          '--ffmpeg-location', this.ffmpegPath,
           '--format', 'bestaudio/best',
-          '--output', outputPath,
+          '--postprocessor-args', '-acodec libmp3lame -ab 192k',
           '--extract-audio',
           '--audio-format', 'mp3',
-          '--audio-quality', '0',
-          '--newline',
+          '--audio-quality', '192',
+          '--output', outputTemplate,
+          '--quiet',
+          '--no-warnings',
           '--progress',
+          '--newline',
+          // Opções adicionais para contornar restrições
           '--no-check-certificate',
           '--ignore-errors',
-          '--no-warnings',
           '--extractor-args', 'youtube:player_client=android',
           '--extractor-retries', '10',
           '--retry-sleep', '5',
@@ -470,6 +486,146 @@ export class Transcriber {
         
       } catch (error) {
         console.error(`[Job ${jobId}] Unexpected error in downloadWithYtDlpAlternative:`, error);
+        reject(error);
+      }
+    });
+  }
+
+  private async downloadWithYtdlCore(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (config.verbose) console.log(`[Job ${jobId}] Tentando download com ytdl-core para: ${videoUrl}`);
+      this.updateJobStatus(jobId, 'downloading');
+      
+      try {
+        // Garantir que o diretório de saída existe
+        const audioDir = path.dirname(outputPath);
+        if (!fs.existsSync(audioDir)) {
+          fs.mkdirSync(audioDir, { recursive: true });
+        }
+        
+        // Obter informações do vídeo
+        ytdl.getInfo(videoUrl).then(info => {
+          if (config.verbose) console.log(`[Job ${jobId}] Informações do vídeo obtidas com sucesso`);
+          
+          // Selecionar o formato de áudio de melhor qualidade
+          const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
+          const bestAudio = audioFormats.sort((a, b) => {
+            const aBitrate = a.audioBitrate || 0;
+            const bBitrate = b.audioBitrate || 0;
+            return bBitrate - aBitrate;
+          })[0];
+          
+          if (!bestAudio) {
+            const error = new Error('Nenhum formato de áudio encontrado');
+            console.error(`[Job ${jobId}] ${error.message}`);
+            reject(error);
+            return;
+          }
+          
+          if (config.verbose) {
+            console.log(`[Job ${jobId}] Melhor formato de áudio selecionado:`, {
+              itag: bestAudio.itag,
+              container: bestAudio.container,
+              quality: bestAudio.audioQuality,
+              bitrate: bestAudio.audioBitrate
+            });
+          }
+          
+          // Iniciar o download
+          const stream = ytdl(videoUrl, { 
+            quality: bestAudio.itag,
+            requestOptions: {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
+              }
+            }
+          });
+          
+          let lastPercent = 0;
+          let lastLogTime = Date.now();
+          let totalBytes = 0;
+          let downloadedBytes = 0;
+          
+          // Obter tamanho total do arquivo
+          if (bestAudio.contentLength) {
+            totalBytes = parseInt(bestAudio.contentLength);
+            if (config.verbose) console.log(`[Job ${jobId}] Tamanho total do arquivo: ${(totalBytes / (1024 * 1024)).toFixed(2)} MB`);
+          }
+          
+          // Monitorar progresso do download
+          stream.on('progress', (_, downloaded, total) => {
+            if (total) totalBytes = total;
+            downloadedBytes = downloaded;
+            
+            const percent = totalBytes > 0 ? Math.floor((downloadedBytes / totalBytes) * 100) : 0;
+            
+            // Atualizar progresso apenas se mudar
+            if (percent > lastPercent) {
+              lastPercent = percent;
+              this.updateJobProgress(jobId, 'download', percent);
+              
+              // Log progress every 5 seconds if verbose
+              const now = Date.now();
+              if (config.verbose && (now - lastLogTime > 5000)) {
+                lastLogTime = now;
+                console.log(`[Job ${jobId}] Download progress (ytdl-core): ${percent}%`);
+              }
+            }
+          });
+          
+          // Criar arquivo de saída diretamente
+          const outputFileStream = fs.createWriteStream(outputPath);
+          
+          // Conectar o stream ao arquivo de saída
+          stream.pipe(outputFileStream);
+          
+          // Gerenciar erros do stream
+          stream.on('error', (err: Error) => {
+            console.error(`[Job ${jobId}] Erro no download:`, err.message);
+            reject(new Error(`Erro no download: ${err.message}`));
+          });
+          
+          // Quando o download for concluído
+          outputFileStream.on('finish', () => {
+            if (config.verbose) console.log(`[Job ${jobId}] Download concluído com sucesso`);
+            
+            // Verificar se o arquivo foi criado
+            if (fs.existsSync(outputPath)) {
+              const stats = fs.statSync(outputPath);
+              if (config.verbose) {
+                console.log(`[Job ${jobId}] Arquivo de áudio baixado (ytdl-core):`, {
+                  path: outputPath,
+                  size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
+                  created: stats.birthtime
+                });
+              }
+              
+              this.updateJobProgress(jobId, 'download', 100);
+              resolve();
+            } else {
+              const error = new Error(`Arquivo de áudio não criado: ${outputPath}`);
+              console.error(`[Job ${jobId}] ${error.message}`);
+              reject(error);
+            }
+          });
+          
+          // Gerenciar erros do arquivo de saída
+          outputFileStream.on('error', (err: Error) => {
+            console.error(`[Job ${jobId}] Erro ao salvar arquivo:`, err.message);
+            reject(new Error(`Erro ao salvar arquivo: ${err.message}`));
+          });
+          
+        }).catch(err => {
+          console.error(`[Job ${jobId}] Erro ao obter informações do vídeo:`, err.message);
+          reject(new Error(`Erro ao obter informações do vídeo: ${err.message}`));
+        });
+        
+      } catch (error) {
+        console.error(`[Job ${jobId}] Erro inesperado no downloadWithYtdlCore:`, error);
         reject(error);
       }
     });
