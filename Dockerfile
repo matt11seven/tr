@@ -8,8 +8,12 @@ COPY web-transcriber/ ./
 # Install dependencies
 RUN npm ci || npm install
 
-# Install ffmpeg
-RUN apk add --no-cache ffmpeg
+# Install ffmpeg, python and yt-dlp
+RUN apk add --no-cache ffmpeg python3 py3-pip
+RUN pip3 install --upgrade pip
+RUN pip3 install yt-dlp
+# Verify yt-dlp installation
+RUN python3 -m yt_dlp --version
 
 # Build the application
 RUN npm run build || echo "Build step skipped"
@@ -19,8 +23,12 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# Install ffmpeg in production image
-RUN apk add --no-cache ffmpeg
+# Install ffmpeg, python and yt-dlp in production image
+RUN apk add --no-cache ffmpeg python3 py3-pip
+RUN pip3 install --upgrade pip
+RUN pip3 install yt-dlp
+# Verify yt-dlp installation
+RUN python3 -m yt_dlp --version
 
 # Copy built files from builder stage
 COPY --from=builder /app/dist ./dist
