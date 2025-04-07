@@ -202,6 +202,8 @@ export class Transcriber {
     }
   }
   
+
+
   // Método auxiliar para extrair o ID do vídeo do YouTube
   private extractVideoId(url: string): string | null {
     const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
@@ -210,6 +212,12 @@ export class Transcriber {
   }
 
   private async downloadVideo(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
+    // Extrair o ID do vídeo para usar em URLs alternativas
+    const videoId = this.extractVideoId(videoUrl);
+    if (!videoId) {
+      throw new Error(`Could not extract video ID from URL: ${videoUrl}`);
+    }
+    
     // Tentar diferentes métodos de download em sequência
     try {
       if (config.verbose) console.log(`[Job ${jobId}] Tentando método principal de download...`);
@@ -223,11 +231,30 @@ export class Transcriber {
         return;
       } catch (error2) {
         if (config.verbose) console.log(`[Job ${jobId}] Método alternativo falhou, tentando método com ytdl-core...`);
-        // Tentar método com ytdl-core como última opção
-        return this.downloadWithYtdlCore(jobId, videoUrl, outputPath);
+        // Tentar método com ytdl-core como terceira opção
+        try {
+          await this.downloadWithYtdlCore(jobId, videoUrl, outputPath);
+          return;
+        } catch (error3) {
+          if (config.verbose) console.log(`[Job ${jobId}] Método com ytdl-core falhou, tentando URL alternativa 1...`);
+          // Tentar URL alternativa como quarta opção
+          // Usar formato invidious que é menos propenso a bloqueios
+          try {
+            const alternativeUrl1 = `https://yewtu.be/watch?v=${videoId}`;
+            await this.downloadWithYtDlpAlternative(jobId, alternativeUrl1, outputPath);
+            return;
+          } catch (error4) {
+            if (config.verbose) console.log(`[Job ${jobId}] URL alternativa 1 falhou, tentando URL alternativa 2...`);
+            // Tentar outra URL alternativa como última opção
+            const alternativeUrl2 = `https://piped.video/watch?v=${videoId}`;
+            return this.downloadWithYtDlpAlternative(jobId, alternativeUrl2, outputPath);
+          }
+        }
       }
     }
   }
+  
+
 
   private async downloadWithYtDlp(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
     return new Promise((resolve, reject) => {
