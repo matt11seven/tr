@@ -212,46 +212,92 @@ export class Transcriber {
   }
 
   private async downloadVideo(jobId: string, videoUrl: string, outputPath: string): Promise<void> {
-    // Extrair o ID do vídeo para usar em URLs alternativas
+    // Extrair o ID do vídeo para usar com o script Python
     const videoId = this.extractVideoId(videoUrl);
     if (!videoId) {
       throw new Error(`Could not extract video ID from URL: ${videoUrl}`);
     }
     
-    // Tentar diferentes métodos de download em sequência
-    try {
-      if (config.verbose) console.log(`[Job ${jobId}] Tentando método principal de download...`);
-      await this.downloadWithYtDlp(jobId, videoUrl, outputPath);
-      return;
-    } catch (error) {
-      if (config.verbose) console.log(`[Job ${jobId}] Método principal falhou, tentando método alternativo...`);
-      // Tentar método alternativo com diferentes opções
+    if (config.verbose) console.log(`[Job ${jobId}] Chamando script Python para download...`);
+    
+    // Usar o script Python existente que está funcionando corretamente
+    return new Promise((resolve, reject) => {
       try {
-        await this.downloadWithYtDlpAlternative(jobId, videoUrl, outputPath);
-        return;
-      } catch (error2) {
-        if (config.verbose) console.log(`[Job ${jobId}] Método alternativo falhou, tentando método com ytdl-core...`);
-        // Tentar método com ytdl-core como terceira opção
-        try {
-          await this.downloadWithYtdlCore(jobId, videoUrl, outputPath);
-          return;
-        } catch (error3) {
-          if (config.verbose) console.log(`[Job ${jobId}] Método com ytdl-core falhou, tentando URL alternativa 1...`);
-          // Tentar URL alternativa como quarta opção
-          // Usar formato invidious que é menos propenso a bloqueios
-          try {
-            const alternativeUrl1 = `https://yewtu.be/watch?v=${videoId}`;
-            await this.downloadWithYtDlpAlternative(jobId, alternativeUrl1, outputPath);
-            return;
-          } catch (error4) {
-            if (config.verbose) console.log(`[Job ${jobId}] URL alternativa 1 falhou, tentando URL alternativa 2...`);
-            // Tentar outra URL alternativa como última opção
-            const alternativeUrl2 = `https://piped.video/watch?v=${videoId}`;
-            return this.downloadWithYtDlpAlternative(jobId, alternativeUrl2, outputPath);
-          }
+        // Verificar se o diretório de áudio existe
+        const audioDir = path.dirname(outputPath);
+        if (!fs.existsSync(audioDir)) {
+          fs.mkdirSync(audioDir, { recursive: true });
         }
+        
+        // Calcular o nome base do arquivo de saída sem extensão
+        const outputBasename = path.basename(outputPath, '.mp3');
+        
+        // Chamada para o script Python com parâmetros necessários
+        // O script Python é responsável por baixar o áudio e convertê-lo para MP3
+        const pythonScript = spawn('python3', [
+          // Caminho absoluto para o script relativo à raiz do projeto
+          path.join(process.cwd(), '../transcribe.py'),
+          '--mode', 'download-only',
+          '--video-id', videoId,
+          '--output', outputPath
+        ]);
+        
+        if (config.verbose) console.log(`[Job ${jobId}] Iniciando processo Python para download...`);
+        
+        pythonScript.stdout.on('data', (data) => {
+          const output = data.toString();
+          if (config.verbose) {
+            console.log(`[Job ${jobId}] Python stdout: ${output.trim()}`);
+          }
+          
+          // Tentar extrair progresso do output, se disponível
+          const match = output.match(/(\d+)% concluído/);
+          if (match && match[1]) {
+            const percent = parseInt(match[1], 10);
+            this.updateJobProgress(jobId, 'download', percent);
+          }
+        });
+        
+        pythonScript.stderr.on('data', (data) => {
+          const output = data.toString();
+          if (config.verbose) {
+            console.log(`[Job ${jobId}] Python stderr: ${output.trim()}`);
+          }
+        });
+        
+        pythonScript.on('close', (code) => {
+          if (code === 0) {
+            if (config.verbose) console.log(`[Job ${jobId}] Python process completed successfully`);
+            
+            // Verificar se o arquivo foi criado
+            if (fs.existsSync(outputPath)) {
+              const stats = fs.statSync(outputPath);
+              if (config.verbose) {
+                console.log(`[Job ${jobId}] Audio file downloaded:`, {
+                  path: outputPath,
+                  size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
+                  created: stats.birthtime
+                });
+              }
+              
+              this.updateJobProgress(jobId, 'download', 100);
+              resolve();
+            } else {
+              const error = new Error(`Audio file not created: ${outputPath}`);
+              console.error(`[Job ${jobId}] ${error.message}`);
+              reject(error);
+            }
+          } else {
+            const error = new Error(`Python process exited with code ${code}`);
+            console.error(`[Job ${jobId}] ${error.message}`);
+            reject(error);
+          }
+        });
+      } catch (error) {
+        console.error(`[Job ${jobId}] Error running Python script: ${error}`);
+        reject(error);
       }
-    }
+    });
   }
   
 

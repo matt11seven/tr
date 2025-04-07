@@ -1,8 +1,10 @@
 import os
 import sys
+import os
 import asyncio
 import logging
 import time
+import argparse
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
@@ -356,53 +358,91 @@ class Transcriber:
 
 async def main():
     """Função principal assíncrona."""
+    # Configurar argumentos de linha de comando
+    parser = argparse.ArgumentParser(description='Transcribe YouTube videos')
+    parser.add_argument('--mode', choices=['interactive', 'download-only'], default='interactive',
+                        help='Modo de operação: interativo ou apenas download')
+    parser.add_argument('--video-id', help='ID do vídeo do YouTube')
+    parser.add_argument('--output', help='Caminho de saída para o arquivo de áudio')
+    
+    args = parser.parse_args()
+    
     try:
         config = Config.from_env()
+        
+        # Modo download-only (para ser chamado pelo código TypeScript)
+        if args.mode == 'download-only':
+            if not args.video_id or not args.output:
+                logger.error("No modo download-only, você deve fornecer --video-id e --output")
+                sys.exit(1)
+                
+            try:
+                video_id = args.video_id
+                output_path = args.output
+                
+                # Verificar se o diretório de áudio existe
+                audio_dir = os.path.dirname(output_path)
+                if not os.path.exists(audio_dir):
+                    os.makedirs(audio_dir, exist_ok=True)
+                
+                # Download do vídeo usando o método direto
+                print(f"Iniciando download do vídeo: {video_id}")
+                downloader = YouTubeDownloader(config.ffmpeg_path)
+                await downloader._download_audio(f"https://www.youtube.com/watch?v={video_id}", output_path)
+                
+                print(f"Download concluído: {output_path}")
+                return
+                
+            except Exception as e:
+                logger.error(f"Erro no download: {e}")
+                sys.exit(1)
+        
+        # Modo interativo (original)
+        print("\n=== TRANSCRIÇÃO DE VÍDEO DO YOUTUBE ===")
+        print("\nDigite a URL do YouTube ou o ID do vídeo")
+        print("Exemplos válidos:")
+        print("- https://www.youtube.com/watch?v=VIDEO_ID")
+        print("- https://youtu.be/VIDEO_ID")
+        print("- VIDEO_ID")
+        
+        video_input = input("\nURL ou ID: ").strip()
+
+        try:
+            # Extrai ID do vídeo
+            if 'youtube.com' in video_input:
+                video_id = video_input.split('watch?v=')[1].split('&')[0]
+            elif 'youtu.be' in video_input:
+                video_id = video_input.split('youtu.be/')[1].split('?')[0]
+            else:
+                video_id = video_input
+
+            # Download do vídeo
+            downloader = YouTubeDownloader(config.ffmpeg_path)
+            audio_path, transcript_path = await downloader.download(video_id)
+
+            # Verifica transcrição existente
+            if os.path.exists(transcript_path):
+                reprocess = input("\nTranscrição já existe. Reprocessar? (s/N): ").strip().lower()
+                if reprocess != 's':
+                    print("\nUsando transcrição existente:")
+                    with open(transcript_path, 'r', encoding='utf-8') as f:
+                        print(f.read())
+                    return
+
+            # Transcrição
+            async with Transcriber(config) as transcriber:
+                await transcriber.transcribe(audio_path, transcript_path, video_id)
+
+            print("\nProcesso concluído com sucesso!")
+
+        except TranscriptionError as e:
+            logger.error(f"Erro na transcrição: {e}")
+        except Exception as e:
+            logger.error(f"Erro inesperado: {e}")
+            
     except ValueError as e:
         logger.error(f"Erro de configuração: {e}")
-        return
-
-    print("\n=== TRANSCRIÇÃO DE VÍDEO DO YOUTUBE ===")
-    print("\nDigite a URL do YouTube ou o ID do vídeo")
-    print("Exemplos válidos:")
-    print("- https://www.youtube.com/watch?v=VIDEO_ID")
-    print("- https://youtu.be/VIDEO_ID")
-    print("- VIDEO_ID")
-    
-    video_input = input("\nURL ou ID: ").strip()
-
-    try:
-        # Extrai ID do vídeo
-        if 'youtube.com' in video_input:
-            video_id = video_input.split('watch?v=')[1].split('&')[0]
-        elif 'youtu.be' in video_input:
-            video_id = video_input.split('youtu.be/')[1].split('?')[0]
-        else:
-            video_id = video_input
-
-        # Download do vídeo
-        downloader = YouTubeDownloader(config.ffmpeg_path)
-        audio_path, transcript_path = await downloader.download(video_id)
-
-        # Verifica transcrição existente
-        if os.path.exists(transcript_path):
-            reprocess = input("\nTranscrição já existe. Reprocessar? (s/N): ").strip().lower()
-            if reprocess != 's':
-                print("\nUsando transcrição existente:")
-                with open(transcript_path, 'r', encoding='utf-8') as f:
-                    print(f.read())
-                return
-
-        # Transcrição
-        async with Transcriber(config) as transcriber:
-            await transcriber.transcribe(audio_path, transcript_path, video_id)
-
-        print("\nProcesso concluído com sucesso!")
-
-    except TranscriptionError as e:
-        logger.error(f"Erro na transcrição: {e}")
-    except Exception as e:
-        logger.error(f"Erro inesperado: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     asyncio.run(main())
